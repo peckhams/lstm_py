@@ -408,7 +408,7 @@ class bmi_LSTM(Bmi):
         self._values['land_surface_water__runoff_depth'] = self.surface_runoff_mm/1000.0
         setattr(self, 'land_surface_water__runoff_depth', self.surface_runoff_mm/1000.0)
         self.streamflow_cms = self.surface_runoff_mm * self.output_factor_cms
-
+        
         self._values['land_surface_water__runoff_volume_flux'] = self.streamflow_cms
         setattr(self, 'land_surface_water__runoff_volume_flux', self.streamflow_cms)
 
@@ -432,7 +432,7 @@ class bmi_LSTM(Bmi):
                 setattr(self, long_var_name, self.cfg_bmi[attribute])
                 
                 # and this is just in case. _values dictionary is in the example
-                self._values[long_var_name] = self.cfg_bmi[attribute]
+                #self._values[long_var_name] = self.cfg_bmi[attribute]
     
     #---------------------------------------------------------------------------- 
     def initialize_forcings(self):
@@ -480,20 +480,39 @@ class bmi_LSTM(Bmi):
         return len(self._output_var_names)
 
     #------------------------------------------------------------ 
-    def get_value(self, var_name):
-        """Copy of values.
+    def get_value(self, var_name: str, dest: np.ndarray) -> np.ndarray:
+        """
+        Copy values for the named variable into the provided destination array.
+
         Parameters
         ----------
         var_name : str
             Name of variable as CSDMS Standard Name.
-        dest : ndarray
-            A numpy array into which to place the values.
+        dest : np.ndarray
+            A numpy array into which to copy the variable values.
         Returns
         -------
-        array_like
+        np.ndarray
             Copy of values.
         """
-        return self.get_value_ptr(var_name)
+        dest[:] = self.get_value_ptr(var_name)
+        return dest
+        
+    #------------------------------------------------------------ 
+#     def get_value(self, var_name):
+#         """Copy of values.
+#         Parameters
+#         ----------
+#         var_name : str
+#             Name of variable as CSDMS Standard Name.
+#         dest : ndarray
+#             A numpy array into which to place the values.
+#         Returns
+#         -------
+#         array_like
+#             Copy of values.
+#         """
+#         return self.get_value_ptr(var_name)
 
     #-------------------------------------------------------------------
     def get_value_ptr(self, var_name):
