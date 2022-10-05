@@ -105,11 +105,12 @@ class bmi_LSTM(Bmi):
                                 #NJF Let the model assume equivalence of `kg m-2` == `mm h-1` since we can't convert
                                 #mass flux automatically from the ngen framework
                                 #'atmosphere_water__time_integral_of_precipitation_mass_flux':['total_precipitation','kg m-2'],
-                                'atmosphere_water__time_integral_of_precipitation_mass_flux':['total_precipitation','mm h-1'],
+                                'atmosphere_water__liquid_equivalent_precipitation_rate':['total_precipitation','mm h-1'],
+                                ## 'atmosphere_water__liquid_equivalent_precipitation_rate':['precip', 'mm h-1'], ##### SDP
+                                ## 'atmosphere_water__time_integral_of_precipitation_mass_flux':['total_precipitation','mm h-1'],
                                 'land_surface_radiation~incoming~longwave__energy_flux':['longwave_radiation','W m-2'],
                                 'land_surface_radiation~incoming~shortwave__energy_flux':['shortwave_radiation','W m-2'],
                                 'atmosphere_air_water~vapor__relative_saturation':['specific_humidity','kg kg-1'],
-                                'atmosphere_water__liquid_equivalent_precipitation_rate':['precip', 'mm h-1'], ############ SDP
                                 'land_surface_air__pressure':['pressure','Pa'],
                                 'land_surface_air__temperature':['temperature','degC'],
                                 'land_surface_wind__x_component_of_velocity':['wind_u','m s-1'],
@@ -172,7 +173,7 @@ class bmi_LSTM(Bmi):
         #When used with NGen, the bmi_cfg_file is just a string...
 
         bmi_cfg_file = Path(bmi_cfg_file)
-        # ----- Create some lookup tabels from the long variable names --------#
+        # ----- Create some lookup tables from the long variable names --------#
         self._var_name_map_long_first = {long_name:self._var_name_units_map[long_name][0] for \
                                          long_name in self._var_name_units_map.keys()}
         self._var_name_map_short_first = {self._var_name_units_map[long_name][0]:long_name for \
@@ -307,10 +308,28 @@ class bmi_LSTM(Bmi):
     #     self.update_frac(n_steps - int(n_steps))
 
     #------------------------------------------------------------ 
-    def update_until(self, last_update):
-       first_update=self.t
-       for t in range(first_update, last_update):
-           self.update()
+    def update_until(self, then):
+        """Update model until a particular time.
+        Parameters
+        ----------
+        then : float
+            Time to run model until.
+        """
+        if self.verbose > 0:
+            print("then", then)
+            print("self.get_current_time()", self.get_current_time())
+            print("self.get_time_step()", self.get_time_step())
+        n_steps = (then - self.get_current_time()) / self.get_time_step()
+
+        for _ in range(int(n_steps)):
+            self.update()
+        self.update_frac(n_steps - int(n_steps))
+
+    #------------------------------------------------------------ 
+    # def update_until(self, last_update):
+    #    first_update=self.t
+    #    for t in range(first_update, last_update):
+    #        self.update()
     #------------------------------------------------------------    
     def finalize( self ):
         """Finalize model."""
@@ -387,12 +406,49 @@ class bmi_LSTM(Bmi):
         self.input_std = np.array(self.input_std)
 
     #------------------------------------------------------------ 
-    def create_scaled_input_tensor(self):
-        
+    def create_scaled_input_tensor(self, VERBOSE=False):
+
+        #------------------------------------------------------------
+        # Note:  A BMI-enabled model should not use long var names
+        #        internally (i.e. saved into self); it should just
+        #        use convenient short names.  For the BMI functions
+        #        that require a long var name, it should be mapped
+        #        to the model's short name before taking action.
+        #------------------------------------------------------------        
         # TODO: Choose to store values in dictionary or not.
-        self.input_array = np.array([getattr(self, self._var_name_map_short_first[x]) for x in self.all_lstm_inputs])
-        self.input_array = np.array([self._values[self._var_name_map_short_first[x]] for x in self.all_lstm_inputs])
-        
+        # self.input_array = np.array([getattr(self, self._var_name_map_short_first[x]) for x in self.all_lstm_inputs])
+        # self.input_array = np.array([self._values[self._var_name_map_short_first[x]] for x in self.all_lstm_inputs])
+
+        #--------------------------------------------------------------        
+        # Note:  The code in this block is more verbose, but makes it
+        #        much easier to test and debug and helped find a bug
+        #        in the lines above (long vs. short names.) 
+        #--------------------------------------------------------------
+        # print('Creating scaled input tensor...')
+        n_inputs = len(self.all_lstm_inputs)
+        self.input_list = []  #############
+        for k in range(n_inputs):
+            short_name = self.all_lstm_inputs[k]
+            long_name  = self._var_name_map_short_first[ short_name ]
+            # vals = self.get_value( self, long_name )
+            vals = getattr( self, short_name )
+
+            self.input_list.append( vals )
+            if (VERBOSE):         
+                print('  short_name =', short_name )
+                print('  long_name  =', long_name )
+                array = getattr( self, short_name )
+                ## array = self.get_value( long_name )  
+                print('  type       =', type(vals) )
+                print('  vals       =', vals )
+
+        self.input_array = np.array( self.input_list )
+        if (VERBOSE):
+            print('Normalizing the tensor...')
+            print('  input_mean =', self.input_mean )
+            print('  input_std  =', self.input_std  )
+            print()
+        # Center and scale the input values for use in torch
         self.input_array_scaled = (self.input_array - self.input_mean) / self.input_std 
         self.input_tensor = torch.tensor(self.input_array_scaled)
         
@@ -425,19 +481,35 @@ class bmi_LSTM(Bmi):
         """
         for attribute in self._static_attributes_list:
             if attribute in self.cfg_train['static_attributes']:
-                
-                long_var_name = self._var_name_map_short_first[attribute]
+                #------------------------------------------------------------
+                # Note:  A BMI-enabled model should not use long var names
+                #        internally (i.e. saved into self); it should just
+                #        use convenient short names.  For the BMI functions
+                #        that require a long var name, it should be mapped
+                #        to the model's short name before taking action.
+                #------------------------------------------------------------
+                setattr(self, attribute, self.cfg_bmi[attribute])  # SDP
 
-                # This is probably the better way to do it,
-                setattr(self, long_var_name, self.cfg_bmi[attribute])
+                ## long_var_name = self._var_name_map_short_first[attribute]
+                ## setattr(self, long_var_name, self.cfg_bmi[attribute])
                 
                 # and this is just in case. _values dictionary is in the example
                 #self._values[long_var_name] = self.cfg_bmi[attribute]
     
     #---------------------------------------------------------------------------- 
     def initialize_forcings(self):
+        print('Initializing all forcings to 0...')
         for forcing_name in self.cfg_train['dynamic_inputs']:
-            setattr(self, self._var_name_map_short_first[forcing_name], 0)
+            print('  forcing_name =', forcing_name)
+            #------------------------------------------------------------
+            # Note:  A BMI-enabled model should not use long var names
+            #        internally (i.e. saved into self); it should just
+            #        use convenient short names.  For the BMI functions
+            #        that require a long var name, it should be mapped
+            #        to the model's short name before taking action.
+            #------------------------------------------------------------
+            setattr(self, forcing_name, 0)
+            ## setattr(self, self._var_name_map_short_first[forcing_name], 0)
 
     #-------------------------------------------------------------------
     #-------------------------------------------------------------------
@@ -610,10 +682,10 @@ class bmi_LSTM(Bmi):
     #-------------------------------------------------------------------
     def get_time_step( self ):
 
-        # Note: get_attribute() is not a BMI v2 method
         return self._time_step_size
+        
+        # Note: get_attribute() is not a BMI v2 method
         # return self.get_attribute( 'time_step_size' )
-
 
     #-------------------------------------------------------------------
     def get_time_units( self ):
@@ -622,7 +694,21 @@ class bmi_LSTM(Bmi):
         return self._time_units
         # return self.get_attribute( 'time_units' )
 
-       
+    #-------------------------------------------------------------------
+#     def set_value(self, var_name: str, values: np.ndarray):
+#         """Set model values.
+# 
+#         Parameters
+#         ----------
+#         var_name : str
+#             Name of variable as CSDMS Standard Name.
+#         values : np.ndarray
+#               Array of new values.
+#         """
+#         internal_array = self.get_value_ptr(var_name)
+#         #self.get_value_ptr(var_name)[:] = values
+#         internal_array[:] = values
+               
     #-------------------------------------------------------------------
     def set_value(self, var_name, value):
         """Set model values.
@@ -638,10 +724,12 @@ class bmi_LSTM(Bmi):
         short_name = self._var_name_map_long_first[ var_name ]
         
         # Better approach, assuming type is "ndarray" (SDP)
-        if (value.ndim > 0):
-            setattr( self, short_name, value[0])
-        else:
-            setattr( self, short_name, value )
+        setattr( self, short_name, value )
+
+#         if (value.ndim > 0):
+#             setattr( self, short_name, value[0])
+#         else:
+#             setattr( self, short_name, value )
             
 #         try: 
 #             #NJF From NGEN, `value` is a singleton array
@@ -659,30 +747,49 @@ class bmi_LSTM(Bmi):
 #             self._values[var_name] = value
 
     #------------------------------------------------------------ 
-    def set_value_at_indices(self, name, inds, src):
-        """Set model values at particular indices.
+    def set_value_at_indices(self, var_name: str, inds: np.ndarray, src: np.ndarray):
+        """
+        Set model values at particular indices.
+
         Parameters
         ----------
         var_name : str
             Name of variable as CSDMS Standard Name.
-        src : array_like
+        inds : np.ndarray
+            Array of corresponding indices into which to copy the values within ``src``.
+        src : np.ndarray
             Array of new values.
-        indices : array_like
-            Array of indices.
         """
-        # JG Note: TODO confirm this is correct. Get/set values ~=
-#        val = self.get_value_ptr(name)
-#        val.flat[inds] = src
+        internal_array = self.get_value_ptr(var_name)
+        for i in range(inds.shape[0]):
+            internal_array[inds[i]] = src[i]
 
-        #JMFrame: chances are that the index will be zero, so let's include that logic
-        if np.array(self.get_value(name)).flatten().shape[0] == 1:
-            self.set_value(name, src)
-        else:
-            # JMFrame: Need to set the value with the updated array with new index value
-            val = self.get_value_ptr(name)
-            for i in inds.shape:
-                val.flatten()[inds[i]] = src[i]
-            self.set_value(name, val)
+
+    #------------------------------------------------------------ 
+#     def set_value_at_indices(self, name, inds, src):
+#         """Set model values at particular indices.
+#         Parameters
+#         ----------
+#         var_name : str
+#             Name of variable as CSDMS Standard Name.
+#         src : array_like
+#             Array of new values.
+#         indices : array_like
+#             Array of indices.
+#         """
+#         # JG Note: TODO confirm this is correct. Get/set values ~=
+# #        val = self.get_value_ptr(name)
+# #        val.flat[inds] = src
+# 
+#         #JMFrame: chances are that the index will be zero, so let's include that logic
+#         if np.array(self.get_value(name)).flatten().shape[0] == 1:
+#             self.set_value(name, src)
+#         else:
+#             # JMFrame: Need to set the value with the updated array with new index value
+#             val = self.get_value_ptr(name)
+#             for i in inds.shape:
+#                 val.flatten()[inds[i]] = src[i]
+#             self.set_value(name, val)
 
     #------------------------------------------------------------ 
     def get_var_nbytes(self, var_name):
@@ -706,6 +813,7 @@ class bmi_LSTM(Bmi):
         except TypeError:
             #must be scalar
             return self.get_var_itemsize(var_name)
+
     #------------------------------------------------------------ 
     def get_value_at_indices(self, var_name, dest, indices):
         """Get values at particular indices.
