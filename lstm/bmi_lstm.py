@@ -274,38 +274,19 @@ class bmi_LSTM(Bmi):
             self.t += self.get_time_step()
 
     #------------------------------------------------------------ 
-    # NOT CURRENTLY IN USE
-    # def update_frac(self, time_frac):
-    #     """Update model by a fraction of a time step.
-    #     Parameters
-    #     ----------
-    #     time_frac : float
-    #         Fraction fo a time step.
-    #     """
-    #     if self.verbose > 0:
-    #         print("Warning: This version of the LSTM is designed to make predictions on one hour timesteps.")
-    #     time_step = self.get_time_step()
-    #     self._time_step_size = time_frac * self._time_step_size
-    #     self.update()
-    #     self._time_step_size = time_step
-
-    #------------------------------------------------------------ 
-    # def update_until(self, then):
-    #     """Update model until a particular time.
-    #     Parameters
-    #     ----------
-    #     then : float
-    #         Time to run model until.
-    #     """
-    #     if self.verbose > 0:
-    #         print("then", then)
-    #         print("self.get_current_time()", self.get_current_time())
-    #         print("self.get_time_step()", self.get_time_step())
-    #     n_steps = (then - self.get_current_time()) / self.get_time_step()
-
-    #     for _ in range(int(n_steps)):
-    #         self.update()
-    #     self.update_frac(n_steps - int(n_steps))
+    def update_frac(self, time_frac):
+        """Update model by a fraction of a time step.
+        Parameters
+        ----------
+        time_frac : float
+            Fraction fo a time step.
+        """
+        if self.verbose > 0:
+            print("Warning: This version of the LSTM is designed to make predictions on one hour timesteps.")
+        time_step = self.get_time_step()
+        self._time_step_size = time_frac * self._time_step_size
+        self.update()
+        self._time_step_size = time_step
 
     #------------------------------------------------------------ 
     def update_until(self, then):
@@ -325,11 +306,6 @@ class bmi_LSTM(Bmi):
             self.update()
         self.update_frac(n_steps - int(n_steps))
 
-    #------------------------------------------------------------ 
-    # def update_until(self, last_update):
-    #    first_update=self.t
-    #    for t in range(first_update, last_update):
-    #        self.update()
     #------------------------------------------------------------    
     def finalize( self ):
         """Finalize model."""
@@ -451,7 +427,7 @@ class bmi_LSTM(Bmi):
         # Center and scale the input values for use in torch
         self.input_array_scaled = (self.input_array - self.input_mean) / self.input_std 
         self.input_tensor = torch.tensor(self.input_array_scaled)
-        
+
     #------------------------------------------------------------ 
     def scale_output(self):
 
@@ -461,11 +437,16 @@ class bmi_LSTM(Bmi):
         elif self.cfg_train['target_variables'][0] == 'QObs(mm/d)':
             self.surface_runoff_mm = (self.lstm_output[0,0,0].numpy().tolist() * self.out_std + self.out_mean) * (1/24)
             
-        self._values['land_surface_water__runoff_depth'] = self.surface_runoff_mm/1000.0
+        # Bound the runoff to zero or obs, as negative values are illogical
+        #if self.surface_runoff_mm < 0.0: self.surface_runoff_mm = 0.0
+        #np.maximum( self.surface_runoff_mm, 0.0, self.surface_runoff_mm)
+        self.surface_runoff_mm = max(self.surface_runoff_mm,0.0)
+
+        #self._values['land_surface_water__runoff_depth'] = self.surface_runoff_mm/1000.0
         setattr(self, 'land_surface_water__runoff_depth', self.surface_runoff_mm/1000.0)
         self.streamflow_cms = self.surface_runoff_mm * self.output_factor_cms
-        
-        self._values['land_surface_water__runoff_volume_flux'] = self.streamflow_cms
+
+        #self._values['land_surface_water__runoff_volume_flux'] = self.streamflow_cms
         setattr(self, 'land_surface_water__runoff_volume_flux', self.streamflow_cms)
 
     #-------------------------------------------------------------------
@@ -516,13 +497,14 @@ class bmi_LSTM(Bmi):
     # BMI: Model Information Functions
     #-------------------------------------------------------------------
     #-------------------------------------------------------------------
+
+    # Note: not currently using _att_map{}
+    # def get_attribute(self, att_name):
     
-    def get_attribute(self, att_name):
-    
-        try:
-            return self._att_map[ att_name.lower() ]
-        except:
-            print(' ERROR: Could not find attribute: ' + att_name)
+    #     try:
+    #         return self._att_map[ att_name.lower() ]
+    #     except:
+    #         print(' ERROR: Could not find attribute: ' + att_name)
 
     #--------------------------------------------------------
     # Note: These are currently variables needed from other
@@ -569,44 +551,56 @@ class bmi_LSTM(Bmi):
         """
         dest[:] = self.get_value_ptr(var_name)
         return dest
-        
-    #------------------------------------------------------------ 
-#     def get_value(self, var_name):
-#         """Copy of values.
-#         Parameters
-#         ----------
-#         var_name : str
-#             Name of variable as CSDMS Standard Name.
-#         dest : ndarray
-#             A numpy array into which to place the values.
-#         Returns
-#         -------
-#         array_like
-#             Copy of values.
-#         """
-#         return self.get_value_ptr(var_name)
 
     #-------------------------------------------------------------------
-    def get_value_ptr(self, var_name):
-        """Reference to values.
+    def get_value_ptr(self, var_name: str) -> np.ndarray:
+        """
+        Get reference to values.
+
+        Get the backing reference - i.e., the backing numpy array - for the given variable.
+
         Parameters
         ----------
         var_name : str
             Name of variable as CSDMS Standard Name.
         Returns
         -------
-        array_like
+        np.ndarray
             Value array.
         """
-        if getattr(self, var_name) != self._values[var_name]:
-            if self.verbose > 0:
-                print("WARNING: The variable ({}) stored in two locations is inconsistent".format(var_name))
-                print('getattr(self, var_name)', getattr(self, var_name))
-                print('self.surface_runoff_mm', self.surface_runoff_mm)
-                print('self._values[var_name]', self._values[var_name])
-        
-        return getattr(self, var_name)   # We don't need to store the variable in a dict and as attributes
-#        return self._values[var_name]   # Pick a place to store them and stick with it.
+        # if getattr(self, var_name) != self._values[var_name]:
+        #     if self.verbose > 0:
+        #         print("WARNING: The variable ({}) stored in two locations is inconsistent".format(var_name))
+        #         print('getattr(self, var_name)', getattr(self, var_name))
+        #         print('self.surface_runoff_mm', self.surface_runoff_mm)
+        #         print('self._values[var_name]', self._values[var_name])
+
+        # We actually need this function to return the backing array, so bypass override of __getattribute__ (that
+        # extracts scalar) and use the base implementation
+        return super(bmi_LSTM, self).__getattribute__(var_name)
+
+
+    #-------------------------------------------------------------------
+#     def get_value_ptr(self, var_name):
+#         """Reference to values.
+#         Parameters
+#         ----------
+#         var_name : str
+#             Name of variable as CSDMS Standard Name.
+#         Returns
+#         -------
+#         array_like
+#             Value array.
+#         """
+#         if getattr(self, var_name) != self._values[var_name]:
+#             if self.verbose > 0:
+#                 print("WARNING: The variable ({}) stored in two locations is inconsistent".format(var_name))
+#                 print('getattr(self, var_name)', getattr(self, var_name))
+#                 print('self.surface_runoff_mm', self.surface_runoff_mm)
+#                 print('self._values[var_name]', self._values[var_name])
+#         
+#         return getattr(self, var_name)   # We don't need to store the variable in a dict and as attributes
+# #        return self._values[var_name]   # Pick a place to store them and stick with it.
 
     #-------------------------------------------------------------------
     #-------------------------------------------------------------------
